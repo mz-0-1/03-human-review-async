@@ -65,14 +65,14 @@ Use the ngrok HTTPS URL + /webhook
 Save the webhook secret
 
 ### 3. Configure Environment
-HUMANLAYER_API_KEY=your_key_here
-OPENAI_API_KEY=your_key_here
-HUMANLAYER_WEBHOOK_SECRET=your_webhook_secret
+- HUMANLAYER_API_KEY=your_key_here
+- OPENAI_API_KEY=your_key_here
+- HUMANLAYER_WEBHOOK_SECRET=your_webhook_secret
 # MySQL Config
-DB_HOST=127.0.0.1
-DB_USER=root
-DB_PASSWORD=p123
-DB_NAME=email_classifier
+- DB_HOST=127.0.0.1
+- DB_USER=root
+- DB_PASSWORD=p123
+- DB_NAME=email_classifier
 
 ### 4. Start MySQL Database
 docker-compose up -d
