@@ -44,7 +44,7 @@ be received by a webhook, and the results will be printed out.
 
 - [ts_email_classifier](./ts_email_classifier) - basic example of various classification/labeling workflows, using an llm to label emails and then providing sync or async mechanisms for human input on classifications
 
-# Humanlayer's 03-human-review-async.ts Email Classifier GUIDE
+# 03-human-review-async.ts Email Classifier GUIDE
 
 This project demonstrates email classification with asynchronous human review using HumanLayer's webhooks and MySQL storage.
 
