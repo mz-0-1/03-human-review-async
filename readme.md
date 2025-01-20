@@ -64,7 +64,7 @@ Configure webhook at https://app.humanlayer.dev/:
 Use the ngrok HTTPS URL + /webhook
 Save the webhook secret
 
-### 3. Configure Environment
+### 3. Configure Environment (create .env in root)
 - HUMANLAYER_API_KEY=your_key_here
 - OPENAI_API_KEY=your_key_here
 - HUMANLAYER_WEBHOOK_SECRET=your_webhook_secret
