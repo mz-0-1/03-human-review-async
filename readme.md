@@ -68,7 +68,6 @@ Save the webhook secret
 - HUMANLAYER_API_KEY=your_key_here
 - OPENAI_API_KEY=your_key_here
 - HUMANLAYER_WEBHOOK_SECRET=your_webhook_secret
-# MySQL Config
 - DB_HOST=127.0.0.1
 - DB_USER=root
 - DB_PASSWORD=p123
