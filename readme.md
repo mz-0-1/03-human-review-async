@@ -40,4 +40,53 @@ be received by a webhook, and the results will be printed out.
 
 ![human-review-async](./img/human-review-async.png)
 
+## Humanlayer Cookbooks and Examples
+
+- [ts_email_classifier](./ts_email_classifier) - basic example of various classification/labeling workflows, using an llm to label emails and then providing sync or async mechanisms for human input on classifications
+
+### Humanlayer's Asynchronous TypeScript Email Classifier GUIDE
+
+This project demonstrates email classification with asynchronous human review using HumanLayer's webhooks and MySQL storage.
+
+## Key Differences from Sync Classifier
+- Human Review Requests are asynchronous (sent concurrently)
+- Uses HumanLayer's Response Webhooks  
+- Stores data in MySQL via Docker
+
+## Local Setup Guide
+
+### 1. Install Dependencies
+cd ts_email_classifier
+npm install
+
+### 2. Set up ngrok and HumanLayer Webhook
+Configure webhook at https://app.humanlayer.dev/:
+Use the ngrok HTTPS URL + /webhook
+Save the webhook secret
+
+### 3. Configure Environment
+HUMANLAYER_API_KEY=your_key_here
+OPENAI_API_KEY=your_key_here
+HUMANLAYER_WEBHOOK_SECRET=your_webhook_secret
+# MySQL Config
+DB_HOST=127.0.0.1
+DB_USER=root
+DB_PASSWORD=p123
+DB_NAME=email_classifier
+
+### 4. Start MySQL Database
+docker-compose up -d
+
+### 5. Run the Classifier
+npm run human-review-async
+
+### 6. Test the Endpoint
+curl -X POST http://localhost:3000/process
+
+Watch terminal output for processing status
+Check HumanLayer Dashboard (https://app.humanlayer.dev/) for review requests
+View MySQL database for classification results (docker exec -it ts_email_classifier-mysql-1 mysql -u root -pp123 -e "USE email_classifier; SELECT * FROM email_classifications ORDER BY created_at DESC;")
+
+
+
 
