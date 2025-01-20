@@ -60,9 +60,9 @@ This project demonstrates email classification with asynchronous human review us
 - npm install
 
 ### 2. Set up ngrok and HumanLayer Webhook
-Configure webhook at https://app.humanlayer.dev/:
-Use the ngrok HTTPS URL + /webhook
-Save the webhook secret
+- Configure webhook at https://app.humanlayer.dev/:
+- Use the ngrok HTTPS URL + /webhook
+- Save the webhook secret
 
 ### 3. Configure Environment (create .env in root)
 - HUMANLAYER_API_KEY=your_key_here
@@ -82,9 +82,9 @@ npm run human-review-async
 ### 6. Test the Endpoint
 curl -X POST http://localhost:3000/process
 
-Watch terminal output for processing status
-Check HumanLayer Dashboard (https://app.humanlayer.dev/) for review requests
-View MySQL database for classification results (docker exec -it ts_email_classifier-mysql-1 mysql -u root -pp123 -e "USE email_classifier; SELECT * FROM email_classifications ORDER BY created_at DESC;")
+- Watch terminal output for processing status
+- Check HumanLayer Dashboard (https://app.humanlayer.dev/) for review requests
+- View MySQL database for classification results (docker exec -it ts_email_classifier-mysql-1 mysql -u root -pp123 -e "USE email_classifier; SELECT * FROM email_classifications ORDER BY created_at DESC;")
 
 
 
