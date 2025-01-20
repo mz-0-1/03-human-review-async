@@ -56,8 +56,8 @@ This project demonstrates email classification with asynchronous human review us
 ## Local Setup Guide
 
 ### 1. Install Dependencies
-cd ts_email_classifier
-npm install
+- cd ts_email_classifier
+- npm install
 
 ### 2. Set up ngrok and HumanLayer Webhook
 Configure webhook at https://app.humanlayer.dev/:
