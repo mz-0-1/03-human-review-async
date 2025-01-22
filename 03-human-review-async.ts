@@ -11,11 +11,22 @@ import {
   ClassifiedEmail
 } from "./common";
 import { v4 as uuidv4 } from 'uuid';
+import cors from 'cors';
 
 const app = express();
+
+// Allow all origins with '*' - USE ONLY FOR TESTING PRODUCTION CLIENTS
+app.use(cors({
+  origin: '*', // replace with https://your-secure-frontend.app
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
+
 app.use(express.json());
 
 config();
+
+
 
 // MySQL connection
 const pool = mysql.createPool({
@@ -31,6 +42,8 @@ const hl = new HumanLayer({
   runId: "email-classifier-webhook",
 });
 
+// Global array to hold active SSE response objects.
+const sseClients: Array<express.Response> = [];
 
 /// *** HELPER FUNCTIONS START HERE *** ///
 
@@ -187,7 +200,20 @@ async function updateWithHumanReview(
         console.error(`No record found for ID: ${callId}`);
       } else {
         console.log(`Successfully updated record for ID: ${callId}`);
+        // Construct the update payload.
+        const updatePayload = {
+          type: 'update',
+          callId,
+          humanClassification,
+          humanComment,
+          timestamp: new Date().toISOString()
+        };
+  
+        // Broadcast to all connected SSE clients.
+        broadcastSseEvent(updatePayload);
       }
+    } catch (error) {
+      console.error("Failed updating record:", error);
     } finally {
       connection.release();
     }
@@ -250,10 +276,71 @@ async function processHandler(req: Request, res: Response) {
   }
 }
 
+function broadcastSseEvent(data: any) {
+  sseClients.forEach((clientRes) => {
+    // Format the data according to SSE protocol
+    clientRes.write(`data: ${JSON.stringify(data)}\n\n`);
+  });
+}
+
 /// *** HELPER FUNCTIONS FINISH HERE *** ///
 
 app.post('/webhook', webhookHandler);
 app.post('/process', processHandler as RequestHandler);
+
+app.get('/sse', async (req, res) => {
+  // Set SSE required headers
+  res.set({
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive'
+  });
+  res.flushHeaders(); // Immediately send the headers
+
+  // Add this SSE connection to our global array
+  sseClients.push(res);
+
+  // Query the database and send all data to the client immediately.
+  try {
+    const connection = await pool.getConnection();
+    try {
+      const [rows] = await connection.query(`
+        SELECT 
+          id,
+          subject,
+          body,
+          email_to AS \`to\`,
+          email_from AS \`from\`,
+          classification,
+          human_classification AS humanClassification,
+          human_comment AS humanComment,
+          has_human_review AS hasHumanReview,
+          status,
+          created_at,
+          updated_at
+        FROM email_classifications
+      `);
+      // Send the current full dataset.
+      // You can either send as one large payload...
+      res.write(`data: ${JSON.stringify({ initialData: rows })}\n\n`);
+      // ...or loop through rows individually if desired.
+    } finally {
+      connection.release();
+    }
+  } catch (error) {
+    console.error("Error querying initial data:", error);
+    res.write(`data: ${JSON.stringify({ error: "Failed to load initial data" })}\n\n`);
+  }
+
+  // When client disconnects, remove the connection from the global array.
+  req.on('close', () => {
+    const index = sseClients.indexOf(res);
+    if (index !== -1) {
+      sseClients.splice(index, 1);
+    }
+    res.end();
+  });
+});
 
 // Server startup
 const PORT = process.env.PORT || 3000;

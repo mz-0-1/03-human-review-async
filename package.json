@@ -8,8 +8,7 @@
     "start": "node dist/03-human-review-async.js",
     "no-humans": "tsx --env-file=.env 01-no-humans.ts",
     "human-review-sync": "tsx --env-file=.env 02-human-review-sync.ts",
-    "human-review-async": "tsx --env-file=.env 03-human-review-async.ts" 
-
+    "human-review-async": "tsx --env-file=.env 03-human-review-async.ts"
   },
   "repository": {
     "type": "git",
@@ -25,6 +24,7 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@types/express": "^5.0.0",
+    "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "humanlayer": "0.7.1",
@@ -33,6 +33,7 @@
     "uuid": "^11.0.5"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.17",
     "@types/node": "^20.14.9",
     "ts-node": "^10.9.2",
     "tsx": "^4.19.0",
