@@ -9,7 +9,7 @@ import {
   twoEmailsShuffled,
   logEmails,
   ClassifiedEmail
-} from "./common.js";
+} from "./common";
 import { v4 as uuidv4 } from 'uuid';
 
 const app = express();
