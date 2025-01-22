@@ -3,7 +3,6 @@
   "version": "0.1.0",
   "description": "example of using humanlayer with openai in typescript",
   "main": "index.ts",
-  "type": "module",
   "scripts": {
     "build": "tsc",
     "start": "node dist/03-human-review-async.js",
