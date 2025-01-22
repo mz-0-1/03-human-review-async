@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
+    "start": "node dist/03-human-review-async.js",
     "no-humans": "tsx --env-file=.env 01-no-humans.ts",
     "human-review-sync": "tsx --env-file=.env 02-human-review-sync.ts",
     "human-review-async": "tsx --env-file=.env 03-human-review-async.ts" 

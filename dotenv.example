@@ -1,4 +1,10 @@
-# copy to .env
-OPENAI_API_KEY=
+# Database Configuration
+DB_HOST=mysql
+DB_USER=root
+DB_PASSWORD=example_password
+DB_NAME=email_classifier
 
-HUMANLAYER_API_KEY=
+# API Configuration
+OPENAI_API_KEY=example_key
+HUMANLAYER_API_KEY=example_key
+
