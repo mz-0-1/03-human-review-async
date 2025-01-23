@@ -1,139 +1,145 @@
-import express, {Request, Response, RequestHandler, Router} from 'express';
-import { HumanLayer, FunctionCall, ResponseOption } from "humanlayer";
+import express, { Request, Response, RequestHandler } from "express";
 import { config } from "dotenv";
-import mysql from 'mysql2/promise';
-import {
-  Classification,
-  classificationValues,
-  classifyEmail,
-  twoEmailsShuffled,
-  logEmails,
-  ClassifiedEmail
-} from "./common";
-import { v4 as uuidv4 } from 'uuid';
-import cors from 'cors';
+import mysql from "mysql2/promise";
+import { v4 as uuidv4 } from "uuid";
+import cors from "cors";
 
+// humanlayer imports
+import { HumanLayer } from "humanlayer";
+// classification logic imports
+import {
+  classifyEmail,
+  classificationValues,
+  ClassifiedEmail,
+  logEmails,
+  twoEmailsShuffled,
+  Classification,
+} from "./common";
+
+config(); // Loads .env
 const app = express();
 
-// Allow all origins with '*' - USE ONLY FOR TESTING PRODUCTION CLIENTS
-app.use(cors({
-  origin: '*', // replace with https://your-secure-frontend.app
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-}));
+// Setup CORS (for dev only; restrict in production)
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
 
+// Parse JSON body
 app.use(express.json());
 
-config();
-
-// MySQL connection
+// Setup MySQL connection pool
 const pool = mysql.createPool({
-  host: process.env.DB_HOST || 'localhost',
-  user: process.env.DB_USER || 'root',
+  host: process.env.DB_HOST || "localhost",
+  user: process.env.DB_USER || "root",
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
 });
 
-// HumanLayer Setup
+// Initialize HumanLayer
 const hl = new HumanLayer({
   verbose: true,
   runId: "email-classifier-webhook",
 });
 
-// Global array to hold active SSE response objects.
+// SSE clients
 const sseClients: Array<express.Response> = [];
 
-/// *** HELPER FUNCTIONS START HERE *** ///
-
-const webhookHandler: RequestHandler = async (req, res): Promise<void> => {
-    try {
-      console.log('=== Webhook received ===');
-      console.log('Headers:', req.headers);
-      console.log('Body:', JSON.stringify(req.body, null, 2));
-      const webhook = req.body;
-  
-      // Log the entire payload for debugging
-      console.log('Received webhook payload:', JSON.stringify(webhook, null, 2));
-  
-      // Check the structure
-      if (!webhook.spec?.kwargs) {
-        console.error('Invalid webhook structure:', webhook);
-        res.status(400).json({
-          error: 'Invalid webhook structure',
-          details: 'Missing spec.kwargs',
-        });
-        return;  
-      }
-  
-      const callId = webhook.spec.kwargs.call_id;
-      if (!callId) {
-        console.error('Missing call_id in kwargs:', webhook.spec.kwargs);
-        res.status(400).json({
-          error: 'Missing call_id',
-          details: 'call_id not found in kwargs',
-        });
-        return;  
-      }
-  
-      // check if the record already exists or is completed
-      const connection = await pool.getConnection();
-      try {
-        const [rows] = await connection.query(
-          'SELECT status FROM email_classifications WHERE id = ?',
-          [callId]
-        );
-        const recordStatus = (rows as any[])[0]?.status;
-  
-        if (!recordStatus) {
-          // The DB has no record for this ID
-          console.log(`No record found for ID: ${callId} (likely old run or unknown)`);
-          res.json({ status: 'no record found' });
-          return;
-        } else if (recordStatus === 'completed') {
-          // Already processed
-          console.log(`Classification already completed for ID: ${callId}`);
-          res.json({ status: 'already processed' });
-          return; 
-        }
-      } finally {
-        connection.release();
-      }
-  
-      // Identify the human classification from the webhook
-      let humanClassification: Classification | null = null;
-      if (webhook.status?.approved && webhook.spec.kwargs) {
-        humanClassification = webhook.spec.kwargs.classification;
-      } else if (webhook.status?.comment?.includes('manual classify:')) {
-        // If the reviewer typed a manual classification in a comment
-        humanClassification = webhook.status.comment.replace('manual classify: ', '') as Classification;
-      }
-  
-      // Update the DB with the human classification
-      await updateWithHumanReview(
+/** 
+ * 1) HELPER FUNCTION: Store new email classification in DB 
+ */
+async function storeEmailClassification(
+  callId: string,
+  email: any,
+  aiClassification: string
+): Promise<void> {
+  const connection = await pool.getConnection();
+  try {
+    await connection.query(
+      `INSERT INTO email_classifications 
+         (id, subject, body, email_to, email_from, classification, status, has_human_review)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
         callId,
-        humanClassification || 'read',      
-        webhook.status?.comment || ''
-      );
+        email.subject,
+        email.body,
+        email.to,
+        email.from,
+        aiClassification,
+        "pending",      // newly created -> pending
+        false,          // no human review yet
+      ]
+    );
+    console.log(`Inserted record with call_id: ${callId}`);
+  } finally {
+    connection.release();
+  }
+}
 
-      // Now, fetch the updated classifications and log the results
-      const allClassifications = await fetchAllClassifications();
-      logEmails(allClassifications);
-  
-      // If everything works, send final response
-      res.json({ status: 'ok' });
-      return;
-    } catch (error) {
-      console.error('Webhook processing error:', error);
-      res.status(500).json({ error: String(error) });
-      return;
+/**
+ * 2) HELPER FUNCTION: Update classification with human review
+ */
+async function updateWithHumanReview(
+  callId: string,
+  humanClassification: Classification,
+  humanComment: string
+) {
+  const connection = await pool.getConnection();
+  try {
+    const [result] = await connection.query(
+      `UPDATE email_classifications
+         SET human_classification = ?,
+             human_comment = ?,
+             status = 'completed',
+             has_human_review = true,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+      [humanClassification, humanComment, callId]
+    );
+
+    const updateResult = result as any;
+    if (updateResult.affectedRows === 0) {
+      console.error(`No record found for ID: ${callId}`);
+    } else {
+      console.log(`Successfully updated record for ID: ${callId}`);
+
+      // Broadcast SSE update
+      const updatePayload = {
+        type: "update",
+        callId,
+        humanClassification,
+        humanComment,
+        timestamp: new Date().toISOString(),
+      };
+      broadcastSseEvent(updatePayload);
     }
-  };
-  
+  } catch (error) {
+    console.error("Failed updating record:", error);
+  } finally {
+    connection.release();
+  }
+}
 
+/** 
+ * 3) HELPER FUNCTION: Broadcast SSE to all connected clients 
+ */
+function broadcastSseEvent(data: any) {
+  sseClients.forEach((clientRes) => {
+    clientRes.write(`data: ${JSON.stringify(data)}\n\n`);
+  });
+}
+
+/**
+ * 4) HELPER FUNCTION: Fetch all classifications
+ */
 async function fetchAllClassifications(): Promise<ClassifiedEmail[]> {
-    const connection = await pool.getConnection(); // ensure pool is imported or available here
-    try {
-        const [rows] = await connection.query(`SELECT 
+  const connection = await pool.getConnection();
+  try {
+    const [rows] = await connection.query(`
+      SELECT
         id,
         subject,
         body,
@@ -146,176 +152,183 @@ async function fetchAllClassifications(): Promise<ClassifiedEmail[]> {
         status,
         created_at,
         updated_at
-      FROM email_classifications`);
-        // Convert rows (if needed) to match ClassifiedEmail
-        return rows as ClassifiedEmail[];
-    } finally {
-        connection.release();
-    }
-    }
-  
-  
-
-// Function to store email classification in MySQL
-async function storeEmailClassification(
-  callId: string,
-  email: any,
-  aiClassification: string
-) {
-  const connection = await pool.getConnection();
-  try {
-    await connection.query(
-      `INSERT INTO email_classifications 
-       (id, subject, body, email_to, email_from, classification, status, has_human_review)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [callId, email.subject, email.body, email.to, email.from, aiClassification, 'pending', false]
-    );
+      FROM email_classifications
+    `);
+    return rows as ClassifiedEmail[];
   } finally {
     connection.release();
   }
 }
 
-
-// Function to update classification with human review
-async function updateWithHumanReview(
-    callId: string,
-    humanClassification: Classification,
-    humanComment: string
-  ) {
-    const connection = await pool.getConnection();
-    try {
-      const [result] = await connection.query(
-        `UPDATE email_classifications 
-         SET human_classification = ?, 
-             human_comment = ?, 
-             status = 'completed',
-             has_human_review = true,
-             updated_at = CURRENT_TIMESTAMP
-         WHERE id = ?`,
-        [humanClassification, humanComment, callId]
-      );
-  
-      const updateResult = result as any;
-      if (updateResult.affectedRows === 0) {
-        console.error(`No record found for ID: ${callId}`);
-      } else {
-        console.log(`Successfully updated record for ID: ${callId}`);
-        // Construct the update payload.
-        const updatePayload = {
-          type: 'update',
-          callId,
-          humanClassification,
-          humanComment,
-          timestamp: new Date().toISOString()
-        };
-  
-        // Broadcast to all connected SSE clients.
-        broadcastSseEvent(updatePayload);
-      }
-    } catch (error) {
-      console.error("Failed updating record:", error);
-    } finally {
-      connection.release();
-    }
-  }
-
-
-
+/**
+ * 5) ENDPOINT:  POST /process 
+ *    - classify emails with AI
+ *    - store them in DB (status='pending')
+ *    - create HL function calls with same call_id
+ */
 async function processEmails() {
-    try {
-      console.log("\nStarting email classification process...\n");
-  
-      for (const email of twoEmailsShuffled) {
-        const callId = `call-${uuidv4().split('-')[0]}`; // Generate ID
-        const classification = await classifyEmail(email);
-        
-        // Log the ID we're using for debugging
-        //console.log(`Using call_id: ${callId}`);
-        
-        await storeEmailClassification(callId, email, classification);
-        // Log the ID we're storing for debugging
-        //console.log(`Stored in database with ID: ${callId}`);
-  
-        await hl.createFunctionCall({
-          spec: {
-            fn: "classifyEmail",
-            kwargs: { 
-              to: email.to, 
-              from: email.from, 
-              subject: email.subject, 
-              body: email.body, 
-              classification,
-              call_id: callId  
-            },
-            reject_options: classificationValues
-              .filter(c => c !== classification)
-              .map(c => ({
-                name: c,
-                title: c,
-                description: `Classify as ${c}`,
-                prompt_fill: `manual classify: ${c}`,
-                interactive: false,
-              })),
-          },
-        });
-      }
-    } catch (error) {
-      console.error("Error:", error);
-    }
+  console.log("\nStarting email classification process...\n");
+
+  // Loop through your sample emails
+  for (const email of twoEmailsShuffled) {
+    // Generate a unique call_id
+    const callId = `call-${uuidv4().split("-")[0]}`;
+
+    // AI classification logic
+    const aiClassification = await classifyEmail(email);
+
+    // Store in DB with 'pending'
+    await storeEmailClassification(callId, email, aiClassification);
+
+    // Create a HumanLayer function call using SAME callId
+    await hl.createFunctionCall({
+      spec: {
+        fn: "classifyEmail",
+        kwargs: {
+          to: email.to,
+          from: email.from,
+          subject: email.subject,
+          body: email.body,
+          classification: aiClassification,
+          call_id: callId, // <--- same ID
+        },
+        // build reject_options from classificationValues
+        reject_options: classificationValues
+          .filter((c) => c !== aiClassification)
+          .map((c) => ({
+            name: c,
+            title: c,
+            description: `Classify as ${c}`,
+            prompt_fill: `manual classify: ${c}`,
+            interactive: false,
+          })),
+      },
+    });
+    console.log(`Created HL function call with callId: ${callId}`);
   }
+}
 
 async function processHandler(req: Request, res: Response) {
   try {
     await processEmails();
-    res.json({ status: 'Processing completed successfully' });
-    return;
+    res.json({ status: "Processing completed successfully" });
   } catch (error) {
     console.error("Error processing emails:", error);
     res.status(500).json({ error: String(error) });
-    return;
   }
 }
 
-function broadcastSseEvent(data: any) {
-  sseClients.forEach((clientRes) => {
-    // Format the data according to SSE protocol
-    clientRes.write(`data: ${JSON.stringify(data)}\n\n`);
-  });
-}
+/**
+ * 6) ENDPOINT:  POST /webhook 
+ *    - Called by HL when user approves or modifies classification
+ *    - We update DB row from 'pending' to 'completed'
+ */
+const webhookHandler: RequestHandler = async (req, res): Promise<void> => {
+  try {
+    console.log("=== Webhook received ===");
+    console.log("Headers:", req.headers);
+    console.log("Body:", JSON.stringify(req.body, null, 2));
 
-/// *** HELPER FUNCTIONS FINISH HERE *** ///
+    const webhook = req.body;
+    if (!webhook.spec?.kwargs) {
+      return void res
+        .status(400)
+        .json({ error: "Invalid webhook structure: missing spec.kwargs" });
+    }
 
-app.post('/webhook', webhookHandler);
-app.post('/process', processHandler as RequestHandler);
+    const callId = webhook.spec.kwargs.call_id;
+    if (!callId) {
+      return void res
+        .status(400)
+        .json({ error: "Missing call_id in webhook" });
+    }
 
-app.get('/sse', async (req, res) => {
-  console.log('=== SSE Connection Start ===');
-  
-  // Set headers
+    // Double-check record in DB
+    const connection = await pool.getConnection();
+    let recordStatus: string | undefined;
+    try {
+      const [rows] = await connection.query(
+        "SELECT status FROM email_classifications WHERE id = ?",
+        [callId]
+      );
+      recordStatus = (rows as any[])[0]?.status;
+    } finally {
+      connection.release();
+    }
+
+    if (!recordStatus) {
+      console.log(`No record found for ID: ${callId}`);
+      return void res.json({ status: "no record found" });
+    } else if (recordStatus === "completed") {
+      console.log(`Classification already completed for ID: ${callId}`);
+      return void res.json({ status: "already processed" });
+    }
+
+    // Figure out if it was approved or manually classified
+    let humanClassification: Classification | null = null;
+    if (webhook.status?.approved) {
+      // HL's "approved" means the user picked the original suggestion
+      humanClassification = webhook.spec.kwargs.classification;
+    } else if (webhook.status?.comment?.includes("manual classify:")) {
+      // If the user typed a manual classification in a comment
+      humanClassification = webhook.status.comment.replace(
+        "manual classify: ",
+        ""
+      ) as Classification;
+    }
+
+    // Default fallback if we can't parse
+    if (!humanClassification) {
+      humanClassification = "read";
+    }
+
+    // Update DB
+    await updateWithHumanReview(callId, humanClassification, webhook.status?.comment || "");
+
+    // Show final logs
+    const allClassifications = await fetchAllClassifications();
+    logEmails(allClassifications);
+
+    res.json({ status: "ok" });
+  } catch (error) {
+    console.error("Webhook processing error:", error);
+    res.status(500).json({ error: String(error) });
+  }
+};
+
+/**
+ * 7) ENDPOINT: GET /sse
+ *    - Opens SSE connection, sends "test" + "initialData", then streams updates
+ */
+app.get("/sse", async (req, res) => {
+  console.log("=== SSE Connection Start ===");
+
+  // SSE headers
   res.set({
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
-    'Access-Control-Allow-Origin': '*'
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "Access-Control-Allow-Origin": "*",
   });
-  res.flushHeaders();
-  console.log('Headers set and flushed');
+  // flush headers (for some frameworks/environments, not always needed)
+  res.flushHeaders?.(); 
+  console.log("Headers set and flushed");
 
-  // Add to clients list
+  // Track the SSE client
   sseClients.push(res);
   console.log(`Client added. Total clients: ${sseClients.length}`);
 
   // Send test message
-  console.log('Sending test message');
-  res.write(`data: ${JSON.stringify({ type: 'test', message: 'SSE Connected' })}\n\n`);
+  console.log("Sending test message");
+  res.write(`data: ${JSON.stringify({ type: "test", message: "SSE Connected" })}\n\n`);
 
   try {
-    console.log('Attempting database connection');
+    console.log("Attempting database connection");
     const connection = await pool.getConnection();
     try {
-      console.log('Running database query');
+      console.log("Running database query");
       const [rows] = await connection.query(`
-        SELECT 
+        SELECT
           id,
           subject,
           body,
@@ -330,45 +343,49 @@ app.get('/sse', async (req, res) => {
           updated_at
         FROM email_classifications
       `);
-      
+
       console.log(`Query complete. Found ${(rows as any[]).length} records`);
-      
-      // Send data
+
+      // Send initial data
       const initialData = { initialData: rows };
       const dataString = JSON.stringify(initialData);
       console.log(`Preparing to send ${dataString.length} bytes of data`);
-      
-      res.write(`data: ${dataString}\n\n`);
-      console.log('Initial data sent');
 
+      res.write(`data: ${dataString}\n\n`);
+      console.log("Initial data sent");
     } finally {
       connection.release();
-      console.log('Database connection released');
+      console.log("Database connection released");
     }
   } catch (error) {
-    console.error('Database error:', error);
-    res.write(`data: ${JSON.stringify({ error: 'Failed to load initial data' })}\n\n`);
+    console.error("Database error:", error);
+    res.write(`data: ${JSON.stringify({ error: "Failed to load initial data" })}\n\n`);
   }
 
-  // Heartbeat
+  // Heartbeat to keep connection alive
   const heartbeat = setInterval(() => {
     if (!res.writableEnded) {
-      res.write(': heartbeat\n\n');
+      res.write(": heartbeat\n\n");
     }
   }, 30000);
 
-  req.on('close', () => {
+  // Cleanup on client disconnect
+  req.on("close", () => {
     clearInterval(heartbeat);
     const index = sseClients.indexOf(res);
     if (index !== -1) {
       sseClients.splice(index, 1);
-      console.log('=== Client disconnected ===');
+      console.log("=== Client disconnected ===");
       console.log(`Remaining clients: ${sseClients.length}`);
     }
   });
 });
 
-// Server startup
+/** 8) Register routes */
+app.post("/webhook", webhookHandler);
+app.post("/process", processHandler);
+
+/** 9) Start server */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
