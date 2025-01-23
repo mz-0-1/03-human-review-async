@@ -300,45 +300,64 @@ app.get('/sse', async (req, res) => {
   });
   res.flushHeaders();
 
-  // Send test message to confirm connection
-  res.write(`data: ${JSON.stringify({ type: 'test', message: 'SSE Connected' })}\n\n`);
-
-  // Add this client to our list of connected clients
+  // Add to clients list first
   sseClients.push(res);
   console.log('Added client. Total clients:', sseClients.length);
 
-  // Send initial data from database
-  try {
-    const connection = await pool.getConnection();
+  // Send immediate test message
+  res.write(`data: ${JSON.stringify({ type: 'test', message: 'SSE Connected' })}\n\n`);
+
+  // Retry database connection a few times
+  let retries = 3;
+  while (retries > 0) {
     try {
-      const [rows] = await connection.query(`
-        SELECT 
-          id,
-          subject,
-          body,
-          email_to AS \`to\`,
-          email_from AS \`from\`,
-          classification,
-          human_classification AS humanClassification,
-          human_comment AS humanComment,
-          has_human_review AS hasHumanReview,
-          status,
-          created_at,
-          updated_at
-        FROM email_classifications
-      `);
-      console.log(`Sending initial data: ${(rows as any[]).length} records`);
-      res.write(`data: ${JSON.stringify({ initialData: rows })}\n\n`);
-    } finally {
-      connection.release();
+      const connection = await pool.getConnection();
+      try {
+        const [rows] = await connection.query(`
+          SELECT 
+            id,
+            subject,
+            body,
+            email_to AS \`to\`,
+            email_from AS \`from\`,
+            classification,
+            human_classification AS humanClassification,
+            human_comment AS humanComment,
+            has_human_review AS hasHumanReview,
+            status,
+            created_at,
+            updated_at
+          FROM email_classifications
+        `);
+        console.log(`Sending initial data: ${(rows as any[]).length} records`);
+        
+        // Break data into smaller chunks if needed
+        const data = JSON.stringify({ initialData: rows });
+        res.write(`data: ${data}\n\n`);
+        
+        break; // Success, exit retry loop
+      } finally {
+        connection.release();
+      }
+    } catch (error) {
+      console.error(`Database connection attempt ${4-retries} failed:`, error);
+      retries--;
+      if (retries === 0) {
+        res.write(`data: ${JSON.stringify({ error: 'Failed to load initial data' })}\n\n`);
+      } else {
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1s before retry
+      }
     }
-  } catch (error) {
-    console.error('Database error:', error);
-    res.write(`data: ${JSON.stringify({ error: 'Failed to load initial data' })}\n\n`);
   }
+
+  // Keep connection alive with heartbeat
+  const heartbeat = setInterval(() => {
+    res.write(': heartbeat\n\n');
+  }, 30000);
 
   // Handle client disconnect
   req.on('close', () => {
+    clearInterval(heartbeat);
     const index = sseClients.indexOf(res);
     if (index !== -1) {
       sseClients.splice(index, 1);
