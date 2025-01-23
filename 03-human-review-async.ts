@@ -51,7 +51,7 @@ const webhookHandler: RequestHandler = async (req, res): Promise<void> => {
       const webhook = req.body;
   
       // Log the entire payload for debugging
-      //console.log('Received webhook payload:', JSON.stringify(webhook, null, 2));
+      console.log('Received webhook payload:', JSON.stringify(webhook, null, 2));
   
       // Check the structure
       if (!webhook.spec?.kwargs) {
