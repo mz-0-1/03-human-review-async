@@ -289,8 +289,9 @@ app.post('/webhook', webhookHandler);
 app.post('/process', processHandler as RequestHandler);
 
 app.get('/sse', async (req, res) => {
-  console.log('New SSE connection requested');
+  console.log('=== SSE Connection Start ===');
   
+  // Set headers
   res.set({
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
@@ -298,80 +299,71 @@ app.get('/sse', async (req, res) => {
     'Access-Control-Allow-Origin': '*'
   });
   res.flushHeaders();
+  console.log('Headers set and flushed');
 
+  // Add to clients list
   sseClients.push(res);
-  console.log('Added client. Total clients:', sseClients.length);
+  console.log(`Client added. Total clients: ${sseClients.length}`);
 
   // Send test message
+  console.log('Sending test message');
   res.write(`data: ${JSON.stringify({ type: 'test', message: 'SSE Connected' })}\n\n`);
 
-  // Database connection with proper error handling
-  let records = [];
-  let retries = 3;
-  
-  while (retries > 0) {
+  try {
+    console.log('Attempting database connection');
+    const connection = await pool.getConnection();
     try {
-      const connection = await pool.getConnection();
-      try {
-        const [rows] = await connection.query(`
-          SELECT 
-            id,
-            subject,
-            body,
-            email_to AS \`to\`,
-            email_from AS \`from\`,
-            classification,
-            human_classification AS humanClassification,
-            human_comment AS humanComment,
-            has_human_review AS hasHumanReview,
-            status,
-            created_at,
-            updated_at
-          FROM email_classifications
-        `);
-        records = rows as any[];
-        console.log(`Successfully fetched ${records.length} records`);
-        
-        // Only send if we actually got data
-        if (records.length > 0) {
-          const data = JSON.stringify({ initialData: records });
-          res.write(`data: ${data}\n\n`);
-          console.log('Initial data sent successfully');
-        }
-        
-        break; // Exit retry loop on success
-      } finally {
-        connection.release();
-      }
-    } catch (error) {
-      console.error(`Database connection attempt ${4-retries} failed:`, error);
-      retries--;
+      console.log('Running database query');
+      const [rows] = await connection.query(`
+        SELECT 
+          id,
+          subject,
+          body,
+          email_to AS \`to\`,
+          email_from AS \`from\`,
+          classification,
+          human_classification AS humanClassification,
+          human_comment AS humanComment,
+          has_human_review AS hasHumanReview,
+          status,
+          created_at,
+          updated_at
+        FROM email_classifications
+      `);
       
-      if (retries === 0) {
-        console.error('All database connection attempts failed');
-        res.write(`data: ${JSON.stringify({ error: 'Failed to load data after multiple attempts' })}\n\n`);
-      } else {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
+      console.log(`Query complete. Found ${(rows as any[]).length} records`);
+      
+      // Send data
+      const initialData = { initialData: rows };
+      const dataString = JSON.stringify(initialData);
+      console.log(`Preparing to send ${dataString.length} bytes of data`);
+      
+      res.write(`data: ${dataString}\n\n`);
+      console.log('Initial data sent');
+
+    } finally {
+      connection.release();
+      console.log('Database connection released');
     }
+  } catch (error) {
+    console.error('Database error:', error);
+    res.write(`data: ${JSON.stringify({ error: 'Failed to load initial data' })}\n\n`);
   }
 
   // Heartbeat
   const heartbeat = setInterval(() => {
-    if (res.writableEnded) {
-      clearInterval(heartbeat);
-      return;
+    if (!res.writableEnded) {
+      res.write(': heartbeat\n\n');
     }
-    res.write(': heartbeat\n\n');
   }, 30000);
 
-  // Cleanup
   req.on('close', () => {
     clearInterval(heartbeat);
     const index = sseClients.indexOf(res);
     if (index !== -1) {
       sseClients.splice(index, 1);
-      console.log('Client disconnected. Remaining clients:', sseClients.length);
+      console.log('=== Client disconnected ===');
+      console.log(`Remaining clients: ${sseClients.length}`);
     }
   });
 });
