@@ -47,7 +47,9 @@ const sseClients: Array<express.Response> = [];
 
 const webhookHandler: RequestHandler = async (req, res): Promise<void> => {
     try {
-
+      console.log('=== Webhook received ===');
+      console.log('Headers:', req.headers);
+      console.log('Body:', JSON.stringify(req.body, null, 2));
       const webhook = req.body;
   
       // Log the entire payload for debugging
@@ -294,6 +296,13 @@ app.get('/sse', async (req, res) => {
     'Connection': 'keep-alive'
   });
   res.flushHeaders(); // Immediately send the headers
+  
+  // Added a heartbeat for testing persistence
+  const heartbeat = setInterval(() => {
+    res.write(':\n\n');
+  }, 30000);
+
+  sseClients.push(res);
 
   // Add this SSE connection to our global array
   sseClients.push(res);
