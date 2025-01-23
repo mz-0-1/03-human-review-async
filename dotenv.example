@@ -7,4 +7,5 @@ DB_NAME=email_classifier
 # API Configuration
 OPENAI_API_KEY=example_key
 HUMANLAYER_API_KEY=example_key
+HUMANLAYER_WEBHOOK_SECRET=example_secret
 

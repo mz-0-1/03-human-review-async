@@ -3,6 +3,7 @@ name: Deploy to EC2
 on:
   push:
     branches: [ main ]
+  workflow_dispatch:  # Allows manual triggering
 
 jobs:
   deploy:
@@ -24,20 +25,37 @@ jobs:
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            # Initialize repository if it doesn't exist
-            if [ ! -d "/app/.git" ]; then
-              cd /app
-              rm -rf *
+            cd /app
+
+            if [ ! -d ".git" ]; then
               git init
               git remote add origin https://github.com/mz-0-1/03-human-review-async.git
               git fetch
               git checkout -f main
             else
-              cd /app
-              git fetch
+              git fetch origin
               git reset --hard origin/main
             fi
-            
-            # Now run docker compose
+
+            # Create/update .env with environment variables
+            cat <<EOF > .env
+            DB_HOST=${{ secrets.DB_HOST }}
+            DB_USER=${{ secrets.DB_USER }}
+            DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+            DB_NAME=${{ secrets.DB_NAME }}
+            OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+            HUMANLAYER_API_KEY=${{ secrets.HUMANLAYER_API_KEY }}
+            HUMANLAYER_WEBHOOK_SECRET=${{ secrets.HUMANLAYER_WEBHOOK_SECRET }} 
+
+            EOF
+
+            # Deploy with Docker Compose
             docker-compose down
             docker-compose up -d --build
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          HUMANLAYER_API_KEY: ${{ secrets.HUMANLAYER_API_KEY }}

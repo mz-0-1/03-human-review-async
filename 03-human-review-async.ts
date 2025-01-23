@@ -26,8 +26,6 @@ app.use(express.json());
 
 config();
 
-
-
 // MySQL connection
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'localhost',
