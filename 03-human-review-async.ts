@@ -291,7 +291,6 @@ app.post('/process', processHandler as RequestHandler);
 app.get('/sse', async (req, res) => {
   console.log('New SSE connection requested');
   
-  // Set SSE headers
   res.set({
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
@@ -300,15 +299,16 @@ app.get('/sse', async (req, res) => {
   });
   res.flushHeaders();
 
-  // Add to clients list first
   sseClients.push(res);
   console.log('Added client. Total clients:', sseClients.length);
 
-  // Send immediate test message
+  // Send test message
   res.write(`data: ${JSON.stringify({ type: 'test', message: 'SSE Connected' })}\n\n`);
 
-  // Retry database connection a few times
+  // Database connection with proper error handling
+  let records = [];
   let retries = 3;
+  
   while (retries > 0) {
     try {
       const connection = await pool.getConnection();
@@ -329,33 +329,43 @@ app.get('/sse', async (req, res) => {
             updated_at
           FROM email_classifications
         `);
-        console.log(`Sending initial data: ${(rows as any[]).length} records`);
+        records = rows as any[];
+        console.log(`Successfully fetched ${records.length} records`);
         
-        // Break data into smaller chunks if needed
-        const data = JSON.stringify({ initialData: rows });
-        res.write(`data: ${data}\n\n`);
+        // Only send if we actually got data
+        if (records.length > 0) {
+          const data = JSON.stringify({ initialData: records });
+          res.write(`data: ${data}\n\n`);
+          console.log('Initial data sent successfully');
+        }
         
-        break; // Success, exit retry loop
+        break; // Exit retry loop on success
       } finally {
         connection.release();
       }
     } catch (error) {
       console.error(`Database connection attempt ${4-retries} failed:`, error);
       retries--;
+      
       if (retries === 0) {
-        res.write(`data: ${JSON.stringify({ error: 'Failed to load initial data' })}\n\n`);
+        console.error('All database connection attempts failed');
+        res.write(`data: ${JSON.stringify({ error: 'Failed to load data after multiple attempts' })}\n\n`);
       } else {
-        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1s before retry
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
     }
   }
 
-  // Keep connection alive with heartbeat
+  // Heartbeat
   const heartbeat = setInterval(() => {
+    if (res.writableEnded) {
+      clearInterval(heartbeat);
+      return;
+    }
     res.write(': heartbeat\n\n');
   }, 30000);
 
-  // Handle client disconnect
+  // Cleanup
   req.on('close', () => {
     clearInterval(heartbeat);
     const index = sseClients.indexOf(res);
