@@ -289,23 +289,25 @@ app.post('/webhook', webhookHandler);
 app.post('/process', processHandler as RequestHandler);
 
 app.get('/sse', async (req, res) => {
-  // Set SSE required headers
+  console.log('New SSE connection requested');
+  
+  // Set SSE headers
   res.set({
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive'
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*'
   });
-  res.flushHeaders(); // Immediately send the headers
-  
-  // Added a heartbeat for testing persistence
-  const heartbeat = setInterval(() => {
-    res.write(':\n\n');
-  }, 30000);
+  res.flushHeaders();
 
-  // Add this SSE connection to our global array
+  // Send test message to confirm connection
+  res.write(`data: ${JSON.stringify({ type: 'test', message: 'SSE Connected' })}\n\n`);
+
+  // Add this client to our list of connected clients
   sseClients.push(res);
+  console.log('Added client. Total clients:', sseClients.length);
 
-  // Query the database and send all data to the client immediately.
+  // Send initial data from database
   try {
     const connection = await pool.getConnection();
     try {
@@ -325,25 +327,23 @@ app.get('/sse', async (req, res) => {
           updated_at
         FROM email_classifications
       `);
-      // Send the current full dataset.
-      // You can either send as one large payload...
+      console.log(`Sending initial data: ${(rows as any[]).length} records`);
       res.write(`data: ${JSON.stringify({ initialData: rows })}\n\n`);
-      // ...or loop through rows individually if desired.
     } finally {
       connection.release();
     }
   } catch (error) {
-    console.error("Error querying initial data:", error);
-    res.write(`data: ${JSON.stringify({ error: "Failed to load initial data" })}\n\n`);
+    console.error('Database error:', error);
+    res.write(`data: ${JSON.stringify({ error: 'Failed to load initial data' })}\n\n`);
   }
 
-  // When client disconnects, remove the connection from the global array.
+  // Handle client disconnect
   req.on('close', () => {
     const index = sseClients.indexOf(res);
     if (index !== -1) {
       sseClients.splice(index, 1);
+      console.log('Client disconnected. Remaining clients:', sseClients.length);
     }
-    res.end();
   });
 });
 
