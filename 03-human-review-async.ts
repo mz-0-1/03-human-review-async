@@ -302,8 +302,6 @@ app.get('/sse', async (req, res) => {
     res.write(':\n\n');
   }, 30000);
 
-  sseClients.push(res);
-
   // Add this SSE connection to our global array
   sseClients.push(res);
 
