@@ -249,7 +249,7 @@ async function processEmails() {
 async function processHandler(req: Request, res: Response) {
   try {
     await processEmails();
-    res.json({ status: "Processing completed successfully" });
+    res.json({ status: "Processing completed successfully! Press the button again to test the HumanLayer webhook!" });
   } catch (error) {
     console.error("Error processing emails:", error);
     res.status(500).json({ error: String(error) });
