@@ -19,7 +19,7 @@ import {
 config(); // Loads .env
 const app = express();
 
-// Setup CORS (for dev only; restrict in production)
+// Setup permissive CORS (for testing production clients only)
 app.use(
   cors({
     origin: "*",
@@ -48,9 +48,11 @@ const hl = new HumanLayer({
 // SSE clients
 const sseClients: Array<express.Response> = [];
 
+/*** 1) HELPER FUNCTIONS START HERE ***/ 
+ 
 /** 
- * 1) HELPER FUNCTION: Store new email classification in DB 
- */
+ * Store new email classification in DB
+ */ 
 async function storeEmailClassification(
   callId: string,
   email: any,
@@ -58,10 +60,13 @@ async function storeEmailClassification(
 ): Promise<void> {
   const connection = await pool.getConnection();
   try {
+    // 1) Insert into DB
     await connection.query(
-      `INSERT INTO email_classifications 
-         (id, subject, body, email_to, email_from, classification, status, has_human_review)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `
+      INSERT INTO email_classifications
+        (id, subject, body, email_to, email_from, classification, status, has_human_review)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `,
       [
         callId,
         email.subject,
@@ -69,15 +74,48 @@ async function storeEmailClassification(
         email.to,
         email.from,
         aiClassification,
-        "pending",      // newly created -> pending
-        false,          // no human review yet
+        "pending",
+        false,
       ]
     );
     console.log(`Inserted record with call_id: ${callId}`);
+
+    // 2) Fetch the newly inserted row so we get DB's timestamps, etc.
+    const [rows] = await connection.query(
+      `
+      SELECT
+        id,
+        subject,
+        body,
+        email_to AS \`to\`,
+        email_from AS \`from\`,
+        classification,
+        human_classification AS humanClassification,
+        human_comment AS humanComment,
+        has_human_review AS hasHumanReview,
+        status,
+        created_at,
+        updated_at
+      FROM email_classifications
+      WHERE id = ?
+      `,
+      [callId]
+    );
+    const newRecord = (rows as any[])[0];
+    if (!newRecord) {
+      console.warn(`Record not found after insert (callId: ${callId})`);
+      return;
+    }
+
+    broadcastSseEvent({
+      type: "newRecord",
+      record: newRecord,
+    });
   } finally {
     connection.release();
   }
 }
+
 
 /**
  * 2) HELPER FUNCTION: Update classification with human review
@@ -124,7 +162,7 @@ async function updateWithHumanReview(
 }
 
 /** 
- * 3) HELPER FUNCTION: Broadcast SSE to all connected clients 
+ * 3) Broadcast SSE to all connected clients 
  */
 function broadcastSseEvent(data: any) {
   sseClients.forEach((clientRes) => {
@@ -133,7 +171,7 @@ function broadcastSseEvent(data: any) {
 }
 
 /**
- * 4) HELPER FUNCTION: Fetch all classifications
+ * 4) Fetch all classifications
  */
 async function fetchAllClassifications(): Promise<ClassifiedEmail[]> {
   const connection = await pool.getConnection();
@@ -161,7 +199,7 @@ async function fetchAllClassifications(): Promise<ClassifiedEmail[]> {
 }
 
 /**
- * 5) ENDPOINT:  POST /process 
+ * 5) 
  *    - classify emails with AI
  *    - store them in DB (status='pending')
  *    - create HL function calls with same call_id
@@ -180,7 +218,7 @@ async function processEmails() {
     // Store in DB with 'pending'
     await storeEmailClassification(callId, email, aiClassification);
 
-    // Create a HumanLayer function call using SAME callId
+    // Create a HumanLayer function call with generated callId
     await hl.createFunctionCall({
       spec: {
         fn: "classifyEmail",
@@ -190,7 +228,7 @@ async function processEmails() {
           subject: email.subject,
           body: email.body,
           classification: aiClassification,
-          call_id: callId, // <--- same ID
+          call_id: callId, 
         },
         // build reject_options from classificationValues
         reject_options: classificationValues
@@ -219,7 +257,7 @@ async function processHandler(req: Request, res: Response) {
 }
 
 /**
- * 6) ENDPOINT:  POST /webhook 
+ * 6) 
  *    - Called by HL when user approves or modifies classification
  *    - We update DB row from 'pending' to 'completed'
  */
@@ -264,7 +302,7 @@ const webhookHandler: RequestHandler = async (req, res): Promise<void> => {
       return void res.json({ status: "already processed" });
     }
 
-    // Figure out if it was approved or manually classified
+    // approved or manually classified
     let humanClassification: Classification | null = null;
     if (webhook.status?.approved) {
       // HL's "approved" means the user picked the original suggestion
@@ -297,7 +335,7 @@ const webhookHandler: RequestHandler = async (req, res): Promise<void> => {
 };
 
 /**
- * 7) ENDPOINT: GET /sse
+ * 7) 
  *    - Opens SSE connection, sends "test" + "initialData", then streams updates
  */
 app.get("/sse", async (req, res) => {
@@ -310,7 +348,7 @@ app.get("/sse", async (req, res) => {
     Connection: "keep-alive",
     "Access-Control-Allow-Origin": "*",
   });
-  // flush headers (for some frameworks/environments, not always needed)
+  // flush headers (not always needed?)
   res.flushHeaders?.(); 
   console.log("Headers set and flushed");
 
@@ -362,7 +400,7 @@ app.get("/sse", async (req, res) => {
     res.write(`data: ${JSON.stringify({ error: "Failed to load initial data" })}\n\n`);
   }
 
-  // Heartbeat to keep connection alive
+  // Heartbeat to keep connection alive (needed only for testing?)
   const heartbeat = setInterval(() => {
     if (!res.writableEnded) {
       res.write(": heartbeat\n\n");
@@ -381,11 +419,11 @@ app.get("/sse", async (req, res) => {
   });
 });
 
-/** 8) Register routes */
+/*** ROUTES ***/
 app.post("/webhook", webhookHandler);
 app.post("/process", processHandler);
 
-/** 9) Start server */
+/*** SERVER ***/
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
